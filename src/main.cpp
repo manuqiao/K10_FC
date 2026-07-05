@@ -34,14 +34,19 @@ UNIHIKER_K10 k10;
 static const int AUDIO_RATE = 32000;
 
 // Run the NES at full 60 Hz for audio, but blit/render only every Nth frame.
-// Measured on HW (2026-07-04): a rendered frame is emu≈12ms + blit≈21ms ≈ 33ms;
-// a skipped frame (draw=false) is ~7ms. N must make the average < 16666us so the
-// emulator outpaces realtime and submit()'s backpressure can pace the loop to
-// exactly 60 Hz (that's what keeps audio smooth). N=2 averages ~20ms (still
-// breaks audio); N=3 averages ~15.7ms (OK) -> video ~20fps, audio 60Hz.
+// The blit is a CPU-blocking SPI push (k10_video.cpp K10_BLIT_OPTIMIZED=1:
+// pre-swapped palette + internal-RAM strip + no-swap pushColors). A GDMA/async
+// path was tried but black-screened on this DFRobot TFT_eSPI fork (initDMA
+// breaks the direct-register writes the menu/blit rely on) — see k10_video.cpp.
+// Measured-ish: a rendered frame is emu≈12ms + blit≈16ms ≈ 28ms; a skipped
+// frame (draw=false) is ~7ms. N must keep the average < 16666us so the emulator
+// outpaces realtime and submit()'s backpressure paces the loop to exactly 60 Hz
+// (that's what keeps audio smooth). N=2 averages ~17.5ms (breaks audio); N=3
+// averages ~14ms (OK, ~2.5ms headroom) -> video ~20fps, audio 60Hz, less stutter
+// than the old PSRAM+swap blit (which averaged ~15.7ms with only ~1ms headroom).
+// Raising video fps needs real async (core-0 blit worker + double-buffered
+// vidbuf), not a smaller N.
 // Audio is produced every frame regardless (apu_emulate() runs even if draw=false).
-// To raise video fps again, cut the blit cost (async DMA so the ~21ms SPI blit
-// overlaps with the next frame's emulation) rather than lowering N.
 static const int BLIT_EVERY_N = 3;
 
 static nes_t   *g_nes = nullptr;
