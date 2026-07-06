@@ -118,4 +118,9 @@ uint8_t read()
     return g_buttons;   // instant: the background task does the slow work
 }
 
+void suspend()
+{
+    if (g_task) vTaskSuspend(g_task);   // freeze the poller; frees the I2C bus
+}
+
 } // namespace k10input

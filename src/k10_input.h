@@ -17,6 +17,11 @@ namespace k10input {
 
 void init();
 
+// Suspend the background poller — used when another input source (the matrix
+// keypad) takes over, so the slow expander reads stop contending for the I2C
+// bus. Idempotent. read() will return the last cached value after this.
+void suspend();
+
 // Returns a NES pad bitmask (bits match nofrendo's NES_PAD_* in nes/input.h).
 uint8_t read();
 

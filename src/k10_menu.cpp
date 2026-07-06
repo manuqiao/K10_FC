@@ -81,8 +81,10 @@ static void draw_menu(TFT_eSPI &tft, const RomEntry *roms, size_t count,
 ControlMode select_mode()
 {
     TFT_eSPI &tft = k10video::display();
-    const char *labels[2] = { "Local control  (board)",
-                              "Bluetooth controller" };
+    const int N = 3;
+    const char *labels[N] = { "Local control  (board)",
+                              "Bluetooth controller",
+                              "Matrix keypad" };
 
     auto draw = [&](int sel) {
         tft.fillScreen(TFT_BLACK);
@@ -93,9 +95,9 @@ ControlMode select_mode()
         tft.drawString("K10 NES  -  Control Mode", 8, TITLE_Y);
         tft.drawFastHLine(0, SEP_Y, DISP_W, TFT_DARKGREY);
 
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < N; i++)
         {
-            int y = TOP_Y + 24 + i * (ROW_H + 6);
+            int y = TOP_Y + 18 + i * (ROW_H + 4);
             bool hot = (i == sel);
             if (hot)
             {
@@ -124,11 +126,11 @@ ControlMode select_mode()
         bool confirm = (cur & NP_A) && !(prev & NP_A);   // board B
         prev = cur;
 
-        if (toggle) { sel ^= 1; draw(sel); }
+        if (toggle) { sel = (sel + 1) % N; draw(sel); }  // cycle through 3 modes
         if (confirm)
         {
             draw(sel); delay(140);   // brief flash so the pick registers
-            return sel == 0 ? MODE_LOCAL : MODE_BLUETOOTH;
+            return (ControlMode)sel; // 0=LOCAL, 1=BLUETOOTH, 2=MATRIX
         }
         delay(20);
     }

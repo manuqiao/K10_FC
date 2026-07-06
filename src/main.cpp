@@ -17,6 +17,7 @@
 #include "k10_video.h"
 #include "k10_audio.h"
 #include "k10_input.h"
+#include "k10_matrix.h"
 #include "k10_menu.h"
 #include "k10_ble.h"
 #include "rom_catalog.h"       // RomEntry, g_roms, g_rom_count (extern)
@@ -55,6 +56,9 @@ static uint8_t *g_vidbuf = nullptr;            // nofrendo indexed framebuffer
 // True once the player picked the Bluetooth controller at the boot mode-select.
 // loop() reads from k10ble when set, else from the board (k10input).
 static bool g_bt_mode = false;
+
+// True once the player picked the matrix keypad. loop() then reads k10matrix.
+static bool g_matrix_mode = false;
 
 // Per-frame timing probe: accumulated across 60 frames, then printed. g_blit_us
 // is filled by nes_blit_cb during nes_emulate() so we can separate blit cost
@@ -102,6 +106,8 @@ void setup()
 
     k10video::init();             // ILI9341 landscape + palette + backlight
     k10input::init();             // background button/tilt poller
+    k10matrix::init();            // external 4x2 keypad: rows P2/P3/P8/P13, cols P0/P1,
+                                  // logs [matrix] pressed/released to Serial
 
     // ---- Game-selection menu (before bringing up the emulator) ----
     if (g_rom_count == 0)
@@ -133,6 +139,17 @@ void setup()
         dpadNav = true;                // controller has a real D-pad
         g_bt_mode = true;
         Serial.println("[main] controller connected; control handed to BLE");
+    }
+    else if (mode == k10menu::MODE_MATRIX)
+    {
+        // Matrix keypad takes over. The board input task is unused in this mode,
+        // so suspend it: its slow expander reads were contending for the I2C bus
+        // and caused the ~2s key lag. Freeing the bus lets the matrix scan fast.
+        k10input::suspend();
+        input   = k10matrix::read;
+        dpadNav = true;                // matrix has a real D-pad
+        g_matrix_mode = true;
+        Serial.println("[main] matrix keypad mode; board poller suspended");
     }
 
     int chosen = k10menu::select_game(g_roms, g_rom_count, input, dpadNav);
@@ -182,6 +199,8 @@ void setup()
 
     if (g_bt_mode)
         Serial.println("[main] running. Controller: D-pad=move  A/B=buttons  Start/Select as labelled");
+    else if (g_matrix_mode)
+        Serial.println("[main] running. Matrix: D-pad=move  A/B=buttons  Start/Select as labelled");
     else
         Serial.println("[main] running. Tilt=move  B=jump(A)  A=shoot(B)  Cover-light=start  Hold A+B=select");
 }
@@ -197,6 +216,8 @@ void loop()
         // BLE: feed 0 while the link is down so a dropped controller doesn't
         // leave buttons stuck; auto-reconnect brings it back.
         buttons = k10ble::isConnected() ? k10ble::read() : 0;
+    else if (g_matrix_mode)
+        buttons = k10matrix::read();
     else
         buttons = k10input::read();                // instant: cached by input task
     input_update(0, buttons);                          // feed joypad state
