@@ -20,6 +20,22 @@
 // enough — and every extra scan is costly because the expander writes are slow.
 #define DEBOUNCE_COUNT 1
 
+// Minimum time a newly pressed key stays asserted in g_keys. The matrix task
+// refreshes g_keys once per loop, but a quick tap is often sensed on a single
+// scan and cleared on the next — leaving the bit set for only one loop gap
+// (~5ms at idle), which the NES frame loop (~14-28ms per input_update) can read
+// right past, dropping the press entirely. Holding each press for at least this
+// long guarantees the consumer sees at least one sample with the key down. Keep
+// it just above one frame so mashing still registers as separate taps.
+#define MIN_PRESS_MS 40
+
+// Temporary latency probe: every MATRIX_LATENCY_MS, print the real scan_once
+// cost and loop period observed DURING gameplay (the boot one-shot probe runs
+// before the audio task exists, so it underestimates). Set 0 to silence once
+// the input lag is localized.
+#define MATRIX_LATENCY_DEBUG 1
+#define MATRIX_LATENCY_MS    2000
+
 // Verbose raw-state probe every MATRIX_DEBUG_MS while diagnosing the keypad.
 // Prints the per-row scan result plus an "all rows LOW" probe so one test run
 // shows whether the expander rows actually drive and whether P0/P1 columns
@@ -115,8 +131,14 @@ static void matrix_task(void *)
     // Per-key debounce integrator: +1 on each "pressed" read, -1 on "released",
     // clamped to [0..255]. Reported state flips to pressed at >= DEBOUNCE_COUNT
     // and back to released once it drains to 0.
-    uint8_t integ[8] = {0};
-    uint8_t reported  = 0;
+    uint8_t  integ[8]    = {0};
+    uint8_t  reported    = 0;
+    uint32_t holdUntil[8]= {0};   // min-press deadline per key (see MIN_PRESS_MS)
+#if MATRIX_LATENCY_DEBUG
+    uint32_t scanSum = 0, scanMax = 0, scanN = 0;
+    uint32_t loopSum = 0, loopMax = 0, loopN = 0, loopLast = 0;
+    uint32_t latLast = 0;
+#endif
 
     Serial.println("[matrix] task started: rows P2/P3/P8/P13, cols P0/P1 (pullup)");
 
@@ -133,33 +155,65 @@ static void matrix_task(void *)
 #endif
     for (;;)
     {
+#if MATRIX_LATENCY_DEBUG
+        uint32_t loopTop = micros();
+        if (loopLast) {
+            uint32_t lp = loopTop - loopLast;
+            loopSum += lp;
+            if (lp > loopMax) loopMax = lp;
+            loopN++;
+        }
+        loopLast = loopTop;
+#endif
+
         // Cheap idle gate: between scans all rows are LOW, so an unpressed keypad
         // leaves both pulled-up columns HIGH. Skip the ~9-write per-row scan until
         // a column actually reads LOW -> idle is two fast native reads, and the
         // scan only runs while a key is held.
         uint8_t raw;
         if (digitalRead(kCols[0]) == LOW || digitalRead(kCols[1]) == LOW)
+        {
+#if MATRIX_LATENCY_DEBUG
+            uint32_t t = micros();
             raw = scan_once();
+            uint32_t d = micros() - t;
+            scanSum += d;
+            if (d > scanMax) scanMax = d;
+            scanN++;
+#else
+            raw = scan_once();
+#endif
+        }
         else
             raw = 0;
 
+        uint32_t now_ms = millis();
         for (int bit = 0; bit < 8; bit++)
         {
             uint8_t mask = 1u << bit;
             if (raw & mask) { if (integ[bit] < 255) integ[bit]++; }
             else            { if (integ[bit] > 0)   integ[bit]--; }
 
-            bool was = (reported & mask);
-            bool now = was ? (integ[bit] > 0)
-                           : (integ[bit] >= DEBOUNCE_COUNT);
+            bool was    = (reported & mask);
+            bool sensed = was ? (integ[bit] > 0)
+                              : (integ[bit] >= DEBOUNCE_COUNT);
 
-            if (now != was)
+            if (sensed && !was)
             {
-                if (now) reported |= mask;
-                else     reported &= ~mask;
-                Serial.printf("[matrix] %s: %s\n",
-                              now ? "pressed " : "released",
-                              kLabel[bit]);
+                reported      |= mask;            // newly pressed
+                holdUntil[bit] = now_ms + MIN_PRESS_MS;
+                Serial.printf("[matrix] pressed  %s\n", kLabel[bit]);
+            }
+            else if (!sensed && was)
+            {
+                // Hold the press at least MIN_PRESS_MS so a quick tap can't
+                // vanish between two reads of g_keys (see MIN_PRESS_MS above).
+                // Signed diff so a uint32 millis() wraparound still compares right.
+                if ((int32_t)(now_ms - holdUntil[bit]) >= 0)
+                {
+                    reported &= ~mask;
+                    Serial.printf("[matrix] released %s\n", kLabel[bit]);
+                }
             }
         }
 
@@ -181,6 +235,21 @@ static void matrix_task(void *)
             int low0 = digitalRead(kCols[0]), low1 = digitalRead(kCols[1]);
             Serial.printf("[matrix] dbg raw=0x%02x  idle P0=%d P1=%d | allLow P0=%d P1=%d\n",
                           raw, idle0, idle1, low0, low1);
+        }
+#endif
+
+#if MATRIX_LATENCY_DEBUG
+        if (millis() - latLast >= MATRIX_LATENCY_MS)
+        {
+            latLast = millis();
+            Serial.printf("[matrix] %lu scans: scan_once avg=%lu max=%lu us | "
+                          "loop avg=%lu max=%lu us (loops=%lu)\n",
+                          (unsigned long)scanN,
+                          scanN ? scanSum / scanN : 0, (unsigned long)scanMax,
+                          loopN ? loopSum / loopN : 0, (unsigned long)loopMax,
+                          (unsigned long)loopN);
+            scanSum = scanMax = scanN = 0;
+            loopSum = loopMax = loopN = 0;
         }
 #endif
 
