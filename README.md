@@ -11,10 +11,13 @@ ODROID-GO 上用的「ILI9341 + I2S + ESP32」方案几乎可以原样搬过来�
 
 工程基于 PlatformIO / Arduino 构建，零警告通过编译；烧录后即玩。
 
-> 关联项目：本工程的蓝牙手柄支持依赖于
-> **[K10_Joystick](https://gitcode.com/Xelocity/K10_Joystick)**（同一作者的 K10 蓝牙手柄
-> 监听工程）。`libs/BLE_FFF0/` 即从该项目中抽取、剥离界面代码后整理成的可复用 BLE Central
-> 库（详见下文[蓝牙手柄](#蓝牙手柄与按键映射表)一节）。
+> 关联项目（同一作者，一对手柄端 / 主机端工程）：
+> - **[BleJoystick](https://gitcode.com/Xelocity/BleJoystick)** ——**配套的安卓手柄 App**，把安卓
+>   手机变成一个 BLE 手柄外设（屏幕虚拟 FC 手柄，或把插在手机上的 USB Xbox 手柄映射出去），经
+>   BLE GATT Notify 推送按键事件。它就是「自定义蓝牙手柄」模式**开箱即用的手柄端**——发出的正是
+>   下文 [FFF0/FFF1 字节协议](#蓝牙手柄与按键映射表)，与本工程对接无需自己写固件。
+> - **[K10_Joystick](https://gitcode.com/Xelocity/K10_Joystick)** ——K10 蓝牙手柄**监听**工程。
+>   `libs/BLE_FFF0/` 即从该项目中抽取、剥离界面代码后整理成的可复用 BLE Central 库。
 
 ---
 
@@ -63,6 +66,10 @@ K10 没有方向键，所以方向靠倾斜主板、其它按键靠两颗物理�
 连接手柄后，操控权交给手柄：方向键移动、A/B 跳跃开火、Start/Select 按标注使用。手柄掉线时
 输入归零（不会卡键），库会自动尝试重连（最多 3 次）。
 
+> 没有实体手柄也行：在安卓手机上装配套的 **[BleJoystick](https://gitcode.com/Xelocity/BleJoystick)**
+> App，手机本身就变成这只「自定义蓝牙手柄」（屏幕虚拟 FC 手柄，或把插在手机上的 USB Xbox 手柄
+> 映射出去），K10 直接扫到、连上即用。详见 [按键映射表](#蓝牙手柄与按键映射表)。
+
 ### 蓝牙 HID 手柄（标准 HID 协议）
 
 与上面的「自定义蓝牙手柄」（HM-10 透串 FFF0/FFF1 字节协议）并列的第二种蓝牙模式，面向**标准
@@ -78,6 +85,9 @@ BLE HID 手柄**（HID 服务 `0x1812`）。开机选「Bluetooth HID gamepad」
   照着改 `BUTTON2NES[]` 即可。
 - K10 是 ESP32-S3，**只支持 BLE**：能连标准 BLE HID 手柄；经典蓝牙手柄（Xbox / PS 原装走经典
   蓝牙的那类）仍连不上。
+
+> 完整的连接/配对/订阅/解码流程（含踩过的两个坑、Report Map 解析、报文特判、API 表）见
+> [`libs/BLE_HID_Host/README.md`](libs/BLE_HID_Host/README.md)。
 
 ---
 
@@ -109,9 +119,12 @@ K10 就会从 `0xFFF1` 收到一个或多个字节的事件包，每个字节编
 | `0x08` | Start | NP_START | `0x08` | `0x88` | `0x08` |
 
 也就是说：想让自制的蓝牙手柄被本工程识别，只要以 HM-10 透传方式连接、并在 `0xFFF1` 上按上表
-发出对应字节即可。多键同时按下时，按状态变化的先后逐字节发送（按下发 `0x80 | code`，松开发
-`code`）。`BLE_FFF0` 库对 `0xFFF1` 还做了降级兼容（128 位 UUID 含 `fff1`、`0xFFF0` 下第一个
-可通知特征、乃至全设备探测模式），详见 `libs/BLE_FFF0/README.md`。
+发出对应字节即可。**不想自己写手柄固件的话**，直接用配套的安卓 App
+**[BleJoystick](https://gitcode.com/Xelocity/BleJoystick)**——它就是把安卓手机变成这只手柄，
+按上表约定经 GATT Notify 推送字节，无需自己实现协议。多键同时按下时，按状态变化的先后逐字节
+发送（按下发 `0x80 | code`，松开发 `code`）。`BLE_FFF0` 库对 `0xFFF1` 还做了降级兼容
+（128 位 UUID 含 `fff1`、`0xFFF0` 下第一个可通知特征、乃至全设备探测模式），详见
+`libs/BLE_FFF0/README.md`。
 
 ---
 
@@ -185,7 +198,8 @@ cp "MyGame.nes" games/
 platformio.ini            K10 环境（Arduino、USB CDC、Model=None、PSRAM 经 board 开启）
 games/*.nes               ROM 库——编译期全部嵌入固件
 libs/BLE_FFF0/            可复用 BLE Central 库（自定义 HM-10 透串协议，抽取自 K10_Joystick）
-libs/BLE_HID_Host/        可复用 BLE HID 主机库（标准 HID 手柄 0x1812：配对/订阅/Report Map 解析）
+libs/BLE_HID_Host/        可复用 BLE HID 主机库（标准 HID 手柄 0x1812：配对/订阅/Report Map 解析，
+                          连接流程详见其 README.md）
 tools/gen_rom_catalog.py  编译期生成器（extra_scripts）：扫描 games/*.nes，写出
                           src/rom_catalog{,_data}.h
 src/
@@ -218,4 +232,5 @@ lib/nofrendo/             retro-go 的 nofrendo NES 核心；仅 nes/utils.h 被
 
 - NES 模拟：**nofrendo** © Matthew Conte，经 [ducalex/retro-go](https://github.com/ducalex/retro-go)（GPL-2）。
 - 蓝牙手柄库：**[K10_Joystick](https://gitcode.com/Xelocity/K10_Joystick)**（`libs/BLE_FFF0/` 抽取自该项目）。
+- 配套安卓手柄 App：**[BleJoystick](https://gitcode.com/Xelocity/BleJoystick)**（「自定义蓝牙手柄」模式的手柄端：手机即手柄）。
 - 硬件：DFRobot UNIHIKER K10 / DFRobot platform-unihiker。
