@@ -21,6 +21,12 @@ namespace k10audio {
 #define AUDIO_STREAM_BYTES    8192   // ~7-8 frames of int16 slack
 #define AUDIO_TASK_STACK      2048   // words
 
+// Software output volume as a percent (0..100), applied in the drain task when
+// the mono sample is fanned out to stereo. The K10 amp gain pin (eAmp_Gain) is
+// only high/low, so fine volume control is done here by scaling the samples
+// (sign-preserving). Set to 100 for full volume.
+#define AUDIO_VOLUME_PCT      5
+
 static StreamBufferHandle_t g_stream = nullptr;
 static TaskHandle_t         g_task   = nullptr;
 
@@ -39,9 +45,11 @@ static void audio_task(void *)
         size_t nsamp = got / 2;
         for (size_t j = 0; j < nsamp; j++)
         {
-            uint16_t s = (uint16_t)mono[j];   // copy as-is (sign preserved)
-            stereo[j * 2]     = s;            // L
-            stereo[j * 2 + 1] = s;            // R
+            int16_t s = mono[j];                       // sign-preserving
+            s = (int16_t)((int32_t)s * AUDIO_VOLUME_PCT / 100);
+            uint16_t u = (uint16_t)s;
+            stereo[j * 2]     = u;                     // L
+            stereo[j * 2 + 1] = u;                     // R
         }
         size_t written = 0;
         i2s_write(I2S_NUM_0, (const void *)stereo, nsamp * 4, &written, portMAX_DELAY);

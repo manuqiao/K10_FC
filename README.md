@@ -24,10 +24,11 @@ ODROID-GO 上用的「ILI9341 + I2S + ESP32」方案几乎可以原样搬过来�
 上电 → 控制方式选择 → （蓝牙模式：扫描/选择/连接手柄）→ 游戏列表 → 运行游戏
 ```
 
-1. **控制方式选择**（始终由板上按键操作）
-   - 板上 **A**：在「本机控制」/「蓝牙手柄」之间切换
+1. **控制方式选择**（始终由板上按键操作）——四选一循环：
+   - 板上 **A**：在「本机控制」/「蓝牙手柄(自定义)」/「蓝牙 HID 手柄」/「矩阵键盘」之间切换
    - 板上 **B**：确认
-2. **蓝牙手柄模式**：进入扫描界面（8 秒），列出按信号强度排序的设备，板上按键操作：
+2. **蓝牙手柄模式**（自定义 / HID 两种都走同一套流程）：进入扫描界面（8 秒），
+   列出按信号强度排序的设备，板上按键操作：
    - 板上 **A**：选择下一个设备
    - 板上 **B**：连接
    - **长按 A+B**：重新扫描
@@ -36,7 +37,7 @@ ODROID-GO 上用的「ILI9341 + I2S + ESP32」方案几乎可以原样搬过来�
    | 模式 | 移动高亮 | 启动游戏 |
    |------|----------|----------|
    | 本机控制（板上按键） | 板上 **A** | 板上 **B** |
-   | 蓝牙手柄 | 手柄 **上/下** | 手柄 **A** 或 **Start** |
+   | 蓝牙手柄（自定义 / HID） | 手柄 **上/下** | 手柄 **A** 或 **Start** |
 
 ---
 
@@ -61,6 +62,22 @@ K10 没有方向键，所以方向靠倾斜主板、其它按键靠两颗物理�
 
 连接手柄后，操控权交给手柄：方向键移动、A/B 跳跃开火、Start/Select 按标注使用。手柄掉线时
 输入归零（不会卡键），库会自动尝试重连（最多 3 次）。
+
+### 蓝牙 HID 手柄（标准 HID 协议）
+
+与上面的「自定义蓝牙手柄」（HM-10 透串 FFF0/FFF1 字节协议）并列的第二种蓝牙模式，面向**标准
+BLE HID 手柄**（HID 服务 `0x1812`）。开机选「Bluetooth HID gamepad」后走同样的扫描/选择/连接
+流程：K10 作为 BLE 主机与手柄**配对绑定**（just-works，密钥写入 NVS，重启后重连免重新配对），
+订阅手柄的 Report 特征值，并解析 HID Report Map 自动识别按键位与方向键（hat）布局。
+
+- 方向键取自 HID hat（Usage `0x39`）；A/B/Start/Select 取自按键字段（Usage Page `0x09`），
+  经 `src/k10_ble_hid.cpp` 顶部的 `BUTTON2NES[]` 表按 Android 约定映射（Btn1=A、Btn2=B、
+  Btn7=Select、Btn8=Start）。
+- **按键不对就调表**：廉价手柄的按键编号并不统一。把 `libs/BLE_HID_Host/BLE_HID_Host.cpp` 顶部
+  的 `K10_BLE_HID_DEBUG` 置 1，串口会打印每帧原始字节与解析结果（和当初抓 FFF0 协议同一套办法），
+  照着改 `BUTTON2NES[]` 即可。
+- K10 是 ESP32-S3，**只支持 BLE**：能连标准 BLE HID 手柄；经典蓝牙手柄（Xbox / PS 原装走经典
+  蓝牙的那类）仍连不上。
 
 ---
 
@@ -167,13 +184,15 @@ cp "MyGame.nes" games/
 ```
 platformio.ini            K10 环境（Arduino、USB CDC、Model=None、PSRAM 经 board 开启）
 games/*.nes               ROM 库——编译期全部嵌入固件
-libs/BLE_FFF0/            可复用 BLE Central 库（抽取自 K10_Joystick，见上文）
+libs/BLE_FFF0/            可复用 BLE Central 库（自定义 HM-10 透串协议，抽取自 K10_Joystick）
+libs/BLE_HID_Host/        可复用 BLE HID 主机库（标准 HID 手柄 0x1812：配对/订阅/Report Map 解析）
 tools/gen_rom_catalog.py  编译期生成器（extra_scripts）：扫描 games/*.nes，写出
                           src/rom_catalog{,_data}.h
 src/
   main.cpp                开机、控制方式选择、ROM 加载、NES 帧循环
   k10_menu.{h,cpp}        控制方式选择屏 + 游戏选择屏
-  k10_ble.{h,cpp}         蓝牙手柄输入源 + 扫描/配对 UI（基于 BLE_FFF0）
+  k10_ble.{h,cpp}         蓝牙手柄输入源 + 扫描/配对 UI（自定义 FFF0 协议，基于 BLE_FFF0）
+  k10_ble_hid.{h,cpp}     蓝牙 HID 手柄输入源 + 扫描/配对 UI（标准 HID，基于 BLE_HID_Host）
   rom_catalog.h           生成：RomEntry + extern 表
   rom_catalog_data.h      生成：ROM 的 PROGMEM 数组 + 表定义
   k10_video.{h,cpp}       NES 调色板 → RGB565 → ILI9341（TFT_eSPI，横屏）

@@ -106,7 +106,7 @@ static void drawScanning(TFT_eSPI &tft)
     tft.drawString("K10 NES  -  BLE Scanning...", 8, TITLE_Y);
     tft.drawFastHLine(0, SEP_Y, DISP_W, TFT_DARKGREY);
     tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.drawString("Searching for BLE devices (8s)", 8, TOP_Y + 10);
+    tft.drawString("Searching for BLE devices (2s)", 8, TOP_Y + 10);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.drawString("See serial for live scan results", 8, TOP_Y + 40);
 }
@@ -182,9 +182,9 @@ bool connect_flow()
 
     for (;;)
     {
-        // ---- scan (blocking 8 s) ----
+        // ---- scan (blocking 2 s) ----
         drawScanning(tft);
-        ble.scan(8000);
+        ble.scan(2000);
 
         int count = ble.deviceCount();
         if (count == 0)

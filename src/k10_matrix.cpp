@@ -20,20 +20,29 @@
 // enough — and every extra scan is costly because the expander writes are slow.
 #define DEBOUNCE_COUNT 1
 
-// Minimum time a newly pressed key stays asserted in g_keys. The matrix task
-// refreshes g_keys once per loop, but a quick tap is often sensed on a single
-// scan and cleared on the next — leaving the bit set for only one loop gap
-// (~5ms at idle), which the NES frame loop (~14-28ms per input_update) can read
-// right past, dropping the press entirely. Holding each press for at least this
-// long guarantees the consumer sees at least one sample with the key down. Keep
-// it just above one frame so mashing still registers as separate taps.
-#define MIN_PRESS_MS 40
+// Minimum time a newly pressed key stays asserted in g_keys, even after the
+// physical key releases. Purpose: a quick tap is sometimes sensed on a single
+// scan and cleared on the next, leaving the bit set for only one loop gap
+// (~5ms), which the NES frame loop (~14-28ms per input_update) could read past
+// and drop. Holding each press briefly guarantees the consumer sees at least one
+// sample with the key down.
+//
+// But keep this SMALL. An original NES/Famicom pad has no such hold — it latches
+// a real snapshot per frame, so releasing stops immediately. A large value here
+// is pure release latency, which hurts: variable jumps (hold A longer = jump
+// higher in Contra/Mario) can no longer register a very short tap as a short
+// hop, and precise platform edge-stops feel "floaty" because the direction key
+// stays asserted past release. ~12ms (~one frame) bridges a tap that straddles
+// two reads while staying close to the original ~8ms release feel. If taps ever
+// get dropped (noisy expander reads), nudge up to 16; if it still feels sticky,
+// try 8.
+#define MIN_PRESS_MS 12
 
 // Temporary latency probe: every MATRIX_LATENCY_MS, print the real scan_once
 // cost and loop period observed DURING gameplay (the boot one-shot probe runs
 // before the audio task exists, so it underestimates). Set 0 to silence once
 // the input lag is localized.
-#define MATRIX_LATENCY_DEBUG 1
+#define MATRIX_LATENCY_DEBUG 0
 #define MATRIX_LATENCY_MS    2000
 
 // Verbose raw-state probe every MATRIX_DEBUG_MS while diagnosing the keypad.
