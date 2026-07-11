@@ -27,8 +27,8 @@ ODROID-GO 上用的「ILI9341 + I2S + ESP32」方案几乎可以原样搬过来�
 上电 → 控制方式选择 → （蓝牙模式：扫描/选择/连接手柄）→ 游戏列表 → 运行游戏
 ```
 
-1. **控制方式选择**（始终由板上按键操作）——四选一循环：
-   - 板上 **A**：在「本机控制」/「蓝牙手柄(自定义)」/「蓝牙 HID 手柄」/「矩阵键盘」之间切换
+1. **控制方式选择**（始终由板上按键操作）——五选一循环：
+   - 板上 **A**：在「本机控制」/「蓝牙手柄(自定义)」/「蓝牙 HID 手柄」/「矩阵键盘」/「ADKeyboard」之间切换
    - 板上 **B**：确认
 2. **蓝牙手柄模式**（自定义 / HID 两种都走同一套流程）：进入扫描界面（8 秒），
    列出按信号强度排序的设备，板上按键操作：
@@ -41,6 +41,7 @@ ODROID-GO 上用的「ILI9341 + I2S + ESP32」方案几乎可以原样搬过来�
    |------|----------|----------|
    | 本机控制（板上按键） | 板上 **A** | 板上 **B** |
    | 蓝牙手柄（自定义 / HID） | 手柄 **上/下** | 手柄 **A** 或 **Start** |
+   | 矩阵键盘 / ADKeyboard | **上/下** | **A** 或 **Start** |
 
 ---
 
@@ -88,6 +89,31 @@ BLE HID 手柄**（HID 服务 `0x1812`）。开机选「Bluetooth HID gamepad」
 
 > 完整的连接/配对/订阅/解码流程（含踩过的两个坑、Report Map 解析、报文特判、API 表）见
 > [`libs/BLE_HID_Host/README.md`](libs/BLE_HID_Host/README.md)。
+
+### ADKeyboard（DFR0075 模拟 5 按键，接扩展板 C0）
+
+把 **[ADKeyboard 模拟 5 按键模块](https://wiki.dfrobot.com.cn/_SKU_DFR0075_ADKeyboard)**
+（SKU DFR0075）接到 **K10 IO 扩展板（SKU DFR1231）的 C0 多功能口**，开机选「ADKeyboard」即可。
+模块只有 5 颗键，所以方向 + A 由它出，SELECT/START 借用板上两颗键凑出来：
+
+| 游戏动作 | NES 按键 | 操作方式 |
+|----------|----------|----------|
+| 移动 | 上/下/左/右 | ADKeyboard **s2 / s4 / s3 / s5** |
+| 跳跃（FC A） | A | ADKeyboard **s1** |
+| 选择 | SELECT | 板上按键 **A** |
+| 开始 / 暂停 | START | 板上按键 **B** |
+
+> 注意：C0 不是 K10 的某个 GPIO/ADC 口——扩展板自带一颗挂在 **I2C 0x33** 的芯片（与板载扩展器、
+> 加速度计、光敏同一条 Wire 总线）来测 C0 电压、对外暴露 12-bit ADC。所以读按键是一次 I2C 事务
+> （先写寄存器 `0x2c` 把 C0 设成 ADC 模式，再读 `0x45` 三字节），并非 `analogRead()`。和矩阵键盘
+> 模式一样，进入此模式时会停掉板载输入轮询和矩阵扫描，把 I2C 总线让给 C0 读取。
+
+**首次使用必须标定阈值**（和矩阵键盘 / HID 手柄同一套套路）：`src/k10_adkey.cpp` 顶部
+`ADKEY_DEBUG` 默认为 `1`，开机后串口每 0.4 秒打印一行 `[adkey] adc=… rawkey=… …`。依次按下
+s1–s5，读出每个键的 `adc` 值，按升序填进 `kKeyThr[5]`（按下时 `adc < 阈值` 即判定为该键），
+再把 `ADKEY_DEBUG` 改回 `0` 重新编译即可。默认值是 DFRobot 经典 10-bit 阈值（30/150/360/535/760）
+按 12-bit 比例放大得到的，只是起点——**DFR0075 有多个硬件版本、且 ADC 在两头非线性，必须实测**。
+键位映射（s1→A、s2→Up、s3→Left、s4→Down、s5→Right）也在同文件的 `kKey2NES[]`，接法不同就改这张表。
 
 ---
 
@@ -212,6 +238,8 @@ src/
   k10_video.{h,cpp}       NES 调色板 → RGB565 → ILI9341（TFT_eSPI，横屏）
   k10_audio.{h,cpp}       I2S 喇叭输出（BCLK0/WS38/DOUT45/MCLK3）
   k10_input.{h,cpp}       倾斜（加速度计）+ A/B + 光敏 → NES 手柄
+  k10_matrix.{h,cpp}      外接 4×2 矩阵键盘 → NES 手柄（行 P2/P3/P8/P13，列 P0/P1）
+  k10_adkey.{h,cpp}       ADKeyboard（DFR0075）接扩展板 C0 → NES 手柄（I2C 0x33 读 ADC）
 lib/nofrendo/             retro-go 的 nofrendo NES 核心；仅 nes/utils.h 被替换
                           （独立 shim，不依赖 retro-go）
 ```

@@ -81,11 +81,12 @@ static void draw_menu(TFT_eSPI &tft, const RomEntry *roms, size_t count,
 ControlMode select_mode()
 {
     TFT_eSPI &tft = k10video::display();
-    const int N = 4;
+    const int N = 5;
     const char *labels[N] = { "Local control  (board)",
                               "Bluetooth controller  (custom)",
                               "Bluetooth HID gamepad",
-                              "Matrix keypad" };
+                              "Matrix keypad",
+                              "ADKeyboard  (extender C0)" };
 
     auto draw = [&](int sel) {
         tft.fillScreen(TFT_BLACK);
@@ -127,11 +128,11 @@ ControlMode select_mode()
         bool confirm = (cur & NP_A) && !(prev & NP_A);   // board B
         prev = cur;
 
-        if (toggle) { sel = (sel + 1) % N; draw(sel); }  // cycle through 4 modes
+        if (toggle) { sel = (sel + 1) % N; draw(sel); }  // cycle through 5 modes
         if (confirm)
         {
             draw(sel); delay(140);   // brief flash so the pick registers
-            return (ControlMode)sel; // 0=LOCAL, 1=BLUETOOTH(custom), 2=BT_HID, 3=MATRIX
+            return (ControlMode)sel; // 0=LOCAL, 1=BLUETOOTH(custom), 2=BT_HID, 3=MATRIX, 4=ADKEYBOARD
         }
         delay(20);
     }

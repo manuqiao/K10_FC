@@ -266,6 +266,11 @@ static void matrix_task(void *)
     }
 }
 
+void suspend()
+{
+    if (g_task) vTaskSuspend(g_task);   // freeze the scan; frees the I2C bus
+}
+
 void init()
 {
     // Rows: expander outputs, all driven LOW at idle so the cheap idle gate in

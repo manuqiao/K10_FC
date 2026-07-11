@@ -18,6 +18,7 @@
 #include "k10_audio.h"
 #include "k10_input.h"
 #include "k10_matrix.h"
+#include "k10_adkey.h"
 #include "k10_menu.h"
 #include "k10_ble.h"
 #include "k10_ble_hid.h"
@@ -67,6 +68,9 @@ static bool g_bt_hid_mode = false;
 
 // True once the player picked the matrix keypad. loop() then reads k10matrix.
 static bool g_matrix_mode = false;
+
+// True once the player picked the ADKeyboard (extender C0). loop() then reads k10adkey.
+static bool g_adkey_mode = false;
 
 // Per-frame timing probe: accumulated across 60 frames, then printed. g_blit_us
 // is filled by nes_blit_cb during nes_emulate() so we can separate blit cost
@@ -173,6 +177,21 @@ void setup()
         g_matrix_mode = true;
         Serial.println("[main] matrix keypad mode; board poller suspended");
     }
+    else if (mode == k10menu::MODE_ADKEYBOARD)
+    {
+        // ADKeyboard on the IO Extender's C0 (the extender's own chip at I2C
+        // 0x33). Like the matrix keypad it owns the I2C bus during gameplay, so
+        // suspend the board poller (slow expander reads) AND the matrix scan to
+        // keep the C0 ADC reads responsive. k10adkey borrows board A/B itself for
+        // SELECT/START, so the board poller is not needed here either.
+        k10input::suspend();
+        k10matrix::suspend();
+        k10adkey::init();
+        input   = k10adkey::read;
+        dpadNav = true;                // ADKeyboard has a real D-pad (s2/s3/s4/s5)
+        g_adkey_mode = true;
+        Serial.println("[main] ADKeyboard mode (extender C0); board poller + matrix suspended");
+    }
 
     int chosen = k10menu::select_game(g_roms, g_rom_count, input, dpadNav);
     if (chosen < 0 || chosen >= (int)g_rom_count)
@@ -225,6 +244,8 @@ void setup()
         Serial.println("[main] running. HID gamepad: D-pad=move  A/B=buttons  Start/Select as labelled");
     else if (g_matrix_mode)
         Serial.println("[main] running. Matrix: D-pad=move  A/B=buttons  Start/Select as labelled");
+    else if (g_adkey_mode)
+        Serial.println("[main] running. ADKeyboard: s2/s4/s3/s5=D-pad  s1=A  board A=Select  board B=Start");
     else
         Serial.println("[main] running. Tilt=move  B=jump(A)  A=shoot(B)  Cover-light=start  Hold A+B=select");
 }
@@ -245,6 +266,8 @@ void loop()
         buttons = k10blehid::isConnected() ? k10blehid::read() : 0;
     else if (g_matrix_mode)
         buttons = k10matrix::read();
+    else if (g_adkey_mode)
+        buttons = k10adkey::read();
     else
         buttons = k10input::read();                // instant: cached by input task
     input_update(0, buttons);                          // feed joypad state

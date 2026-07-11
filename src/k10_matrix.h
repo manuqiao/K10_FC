@@ -39,6 +39,11 @@ namespace k10matrix {
 // called AFTER k10.begin() (which brings up the I2C bus + expander).
 void init();
 
+// Freeze the background scan task — used when another input source takes over
+// (e.g. the ADKeyboard) so the matrix's expander writes stop contending for the
+// I2C bus. Idempotent. read() returns the last cached value after this.
+void suspend();
+
 // Current debounced key bitmask as a NES-pad byte (bits match nofrendo's
 // NES_PAD_* / k10input's NP_*), so the menu and NES core consume it directly:
 //   bit0 A   bit1 B     bit2 Select bit3 Start

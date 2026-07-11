@@ -14,7 +14,7 @@ namespace k10menu {
 // nofrendo's NES_PAD_* / k10input's NP_*).
 using InputFn = uint8_t (*)();
 
-enum ControlMode { MODE_LOCAL, MODE_BLUETOOTH, MODE_BT_HID, MODE_MATRIX };
+enum ControlMode { MODE_LOCAL, MODE_BLUETOOTH, MODE_BT_HID, MODE_MATRIX, MODE_ADKEYBOARD };
 
 // Boot screen: pick how the player will control the NES. Board A toggles the
 // highlighted row, board b confirms. Blocks until a choice is made.
