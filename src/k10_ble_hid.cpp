@@ -25,7 +25,7 @@ static BLE_HID_Gamepad pad;
 
 // Running NES-pad bitmask, updated by the HID notify callback (Bluedroid task)
 // and read by the frame loop. A single-byte store is atomic on Xtensa, so no
-// lock is needed — same pattern as k10input::g_buttons / k10ble::g_pad.
+// lock is needed — same pattern as k10input::g_buttons.
 static volatile uint8_t g_pad = 0;
 
 // ---- Button-number -> NES bit mapping -------------------------------------

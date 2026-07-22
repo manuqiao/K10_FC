@@ -1,8 +1,7 @@
 # BLE_HID_Host
 
 一个**屏幕无关**的最简 BLE Central,面向**标准 BLE HID 手柄**(HID 服务 `0x1812`)。
-与 `BLE_FFF0`(面向 HM-10 类透串外设)是姊妹库——两者互斥使用,各自调用
-`BLEDevice::init()`。
+自己调用 `BLEDevice::init()`,开机选模式时与其它 BLE 模式互斥使用。
 
 提供完整链路:**扫描 → 连接 → just-works 配对绑定 → 读 Report Map 自动学布局 →
 订阅 Report 特征值 → 解码每帧报告成 {按键位掩码, D-pad 方向}**。不含屏幕、不含按键——

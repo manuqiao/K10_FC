@@ -21,7 +21,6 @@
 #include "k10_matrix.h"
 #include "k10_adkey.h"
 #include "k10_menu.h"
-#include "k10_ble.h"
 #include "k10_ble_hid.h"
 #include "rom_catalog.h"       // RomEntry, g_roms, g_rom_count (extern)
 #include "rom_catalog_data.h"  // the embedded ROM images + table (one TU only)
@@ -59,10 +58,6 @@ static const int BLIT_EVERY_N = 3;
 
 static nes_t   *g_nes = nullptr;
 static uint8_t *g_vidbuf = nullptr;            // nofrendo indexed framebuffer
-
-// True once the player picked the custom (FFF0) Bluetooth controller at the boot
-// mode-select. loop() reads from k10ble when set, else from the board (k10input).
-static bool g_bt_mode = false;
 
 // True once the player picked the Bluetooth HID gamepad. loop() then reads k10blehid.
 static bool g_bt_hid_mode = false;
@@ -145,21 +140,7 @@ void setup()
 
     k10menu::InputFn input = k10input::read;   // default: board (tilt + 2 buttons)
     bool    dpadNav = false;
-    if (mode == k10menu::MODE_BLUETOOTH)
-    {
-        Serial.println("[main] Bluetooth mode: scanning for a controller...");
-        k10ble::begin();
-        if (!k10ble::connect_flow())   // blocks until paired (loops on failure)
-        {
-            Serial.println("[main] BLE pairing failed; halting");
-            while (true) delay(1000);
-        }
-        input   = k10ble::read;
-        dpadNav = true;                // controller has a real D-pad
-        g_bt_mode = true;
-        Serial.println("[main] controller connected; control handed to BLE");
-    }
-    else if (mode == k10menu::MODE_BT_HID)
+    if (mode == k10menu::MODE_BT_HID)
     {
         Serial.println("[main] BLE HID mode: scanning for a gamepad...");
         k10blehid::begin();
@@ -246,9 +227,7 @@ void setup()
     nes_setvidbuf(g_vidbuf);
     Serial.printf("[init] vidbuf installed=%p\n", g_vidbuf);
 
-    if (g_bt_mode)
-        Serial.println("[main] running. Controller: D-pad=move  A/B=buttons  Start/Select as labelled");
-    else if (g_bt_hid_mode)
+    if (g_bt_hid_mode)
         Serial.println("[main] running. HID gamepad: D-pad=move  A/B=buttons  Start/Select as labelled");
     else if (g_matrix_mode)
         Serial.println("[main] running. Matrix: D-pad=move  A/B=buttons  Start/Select as labelled");
@@ -265,12 +244,9 @@ void loop()
 
     uint32_t t0 = micros();
     uint8_t buttons;
-    if (g_bt_mode)
-        // BLE: feed 0 while the link is down so a dropped controller doesn't
-        // leave buttons stuck; auto-reconnect brings it back.
-        buttons = k10ble::isConnected() ? k10ble::read() : 0;
-    else if (g_bt_hid_mode)
-        // BLE HID gamepad: same drop-safe pattern (0 while the link is down).
+    if (g_bt_hid_mode)
+        // BLE HID gamepad: feed 0 while the link is down so a dropped gamepad
+        // doesn't leave buttons stuck; auto-reconnect brings it back.
         buttons = k10blehid::isConnected() ? k10blehid::read() : 0;
     else if (g_matrix_mode)
         buttons = k10matrix::read();

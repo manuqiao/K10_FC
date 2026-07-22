@@ -1,8 +1,8 @@
 /*
  * BLE_HID_Host — implementation. See BLE_HID_Host.h for the public surface.
  *
- * Built on the same Bluedroid BLEClient API as BLE_FFF0, but targets standard
- * BLE HID gamepads (service 0x1812). The differences from FFF0:
+ * Built on the Bluedroid BLEClient API, targets standard
+ * BLE HID gamepads (service 0x1812). Key points:
  *   - Just-works bonding (ESP_IO_CAP_NONE + SC_BOND) is configured so the
  *     encrypted HID link comes up; bonds persist to NVS (reconnect w/o re-pair).
  *   - On connect we wait for authentication to complete (a semaphore given by

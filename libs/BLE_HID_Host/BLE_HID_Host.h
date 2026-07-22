@@ -6,16 +6,15 @@
  * (0x2A4B) to learn the report layout, and decodes each incoming report into a
  * small gamepad state (button bitmask + D-pad hat).
  *
- * Sibling to BLE_FFF0 (which targets HM-10-style transparent-UART peripherals).
- * The two are never used together: boot modes are mutually exclusive and each
- * calls BLEDevice::init() itself.
+ * Calls BLEDevice::init() itself; boot control-mode selection ensures it is
+ * never used together with another BLE mode.
  *
  * Requires an ESP32 running the Arduino-ESP32 core (BLEDevice / Bluedroid).
  * ESP32-S3 is BLE-only (no Bluetooth Classic) — that's fine, BLE HID gamepads
  * are the target. Bonding keys are persisted to NVS by the stack, so a
  * reconnect after reboot re-encrypts without re-pairing.
  *
- * Threading (same rules as BLE_FFF0):
+ * Threading:
  *   - onReport()        fires on the Bluedroid host task — keep it short.
  *   - onDisconnect()    fires on the background monitor task.
  *   - scan()/connect()  safe to call from your loop() task.

@@ -3,8 +3,7 @@
 
 // Bluetooth **HID gamepad** NES input source for the K10 NES player.
 //
-// Sibling to k10ble (which speaks the custom HM-10/FFF0 byte protocol). This one
-// targets STANDARD BLE HID gamepads via libs/BLE_HID_Gamepad (which in turn owns
+// Targets STANDARD BLE HID gamepads via libs/BLE_HID_Gamepad (which in turn owns
 // a libs/BLE_HID_Host, service 0x1812). The lib handles everything up to the
 // decoded {buttons, hat} report — bonding (just-works), subscribing, and the
 // scan/pick/connect TFT menu — and is NES-agnostic. THIS file keeps only the
