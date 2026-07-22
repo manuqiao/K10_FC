@@ -1,21 +1,19 @@
 #pragma once
 #include <stdint.h>
 
-// Bluetooth **HID gamepad** input source + scan/pair UI for the K10 NES player.
+// Bluetooth **HID gamepad** NES input source for the K10 NES player.
 //
 // Sibling to k10ble (which speaks the custom HM-10/FFF0 byte protocol). This one
-// targets STANDARD BLE HID gamepads via libs/BLE_HID_Host (service 0x1812): it
-// bonds (just-works), subscribes to the gamepad's Report characteristic, and
-// decodes each HID report into a NES-pad bitmask.
+// targets STANDARD BLE HID gamepads via libs/BLE_HID_Gamepad (which in turn owns
+// a libs/BLE_HID_Host, service 0x1812). The lib handles everything up to the
+// decoded {buttons, hat} report — bonding (just-works), subscribing, and the
+// scan/pick/connect TFT menu — and is NES-agnostic. THIS file keeps only the
+// NES button mapping: onReport() turns each report into a NES-pad bitmask.
 //
 // After begin() + a successful connect_flow(), read() returns a NES-pad bitmask
 // (same bit layout as k10input):
 //   D-pad from the report's hat (Usage 0x39), A/B/Start/Select from the button
-//   field (Usage Page 0x09) via the BUTTON2NES table below.
-//
-// The scan/pick/connect screens are drawn with TFT_eSPI (k10video::display())
-// and operated by the BOARD buttons (k10input), since the pad isn't connected
-// during pairing:  A = next device, B = connect, hold A+B = rescan.
+//   field (Usage Page 0x09) via the BUTTON2NES table in the .cpp.
 namespace k10blehid {
 
 // Bring up the BLE HID host. Call once (idempotent). Configures just-works

@@ -2,9 +2,9 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
-#include <BLE_HID_Host.h>
+#include <BLE_HID_Gamepad.h>
 #include "k10_video.h"   // display()
-#include "k10_input.h"   // read() — board buttons drive the pairing UI
+#include "k10_input.h"   // read() — board buttons drive the pairing UI (in the lib)
 
 // ---- NES pad bits (mirror k10_input.cpp's NP_* so this file is self-contained) ----
 #define NP_A      0x01
@@ -16,16 +16,12 @@
 #define NP_LEFT   0x40
 #define NP_RIGHT  0x80
 
-// Board buttons arrive through k10input packed into the NES byte (see
-// k10_input.cpp): board A -> NP_B (0x02), board B -> NP_A (0x01), and holding
-// A+B past BOTH_HOLD_MS asserts NP_SELECT (0x04). We reuse those for the picker.
-#define BTN_NEXT    NP_B        // board A  -> cycle device
-#define BTN_CONNECT NP_A        // board B  -> connect
-#define BTN_RESCAN  NP_SELECT   // hold A+B -> rescan
-
 namespace k10blehid {
 
-static BLE_HID_Host hid;
+// Owns the BLE_HID_Host + scan/pick/connect TFT menu (libs/BLE_HID_Gamepad).
+// This file keeps only the NES button mapping: onReport() turns the host's
+// {buttons, hat} into a NES-pad bitmask.
+static BLE_HID_Gamepad pad;
 
 // Running NES-pad bitmask, updated by the HID notify callback (Bluedroid task)
 // and read by the frame loop. A single-byte store is atomic on Xtensa, so no
@@ -41,10 +37,10 @@ static volatile uint8_t g_pad = 0;
 //   Button 3 = X (spare) Button 7 = Select    Button 11 = R3
 //   Button 4 = Y (spare) Button 8 = Start     Button 12/13 = L2/R2
 //
-// But cheap pads vary wildly. This table is THE tuning point: watch the serial
-// `[hid] rpt ...` / `[hid] btn=... held=[...]` lines (K10_BLE_HID_DEBUG=1 in
-// libs/BLE_HID_Host/BLE_HID_Host.cpp) for your pad's raw bytes and remap here.
-// Index i = Button (i+1); 0 = unused.
+// But cheap pads vary wildly. This table is THE tuning point; watch the serial
+// `[hid] btn=... held=[...]` lines (K10_BLE_HID_PRINT=1 below, plus the raw
+// `[hid] rpt ...` bytes from K10_BLE_HID_DEBUG=1 in libs/BLE_HID_Host) for your
+// pad's button numbers and remap here. Index i = Button (i+1); 0 = unused.
 //
 // MEASURED for the current pad (10-byte reportId-4 reports, no leading ID byte):
 //   face A -> Btn 2   face B -> Btn 1   Start -> Btn 12   Select -> Btn 11
@@ -173,180 +169,19 @@ void begin()
     if (inited) return;
     inited = true;
 
-    hid.onReport(onReport);
-    hid.onDisconnect(onDisconnect);
-    hid.onLog([](const String &s) { Serial.println(s); });
-    hid.begin("K10-NES-HID");
-    hid.setAutoReconnect(3);   // recover a mid-game drop (up to 3 tries)
+    // Bring up BLE + the scan/pick/connect menu, then register this file's NES
+    // decoder onto the underlying host (the lib is NES-agnostic by design).
+    pad.begin(k10video::display(), k10input::read);
+    pad.host().onReport(onReport);
+    pad.host().onDisconnect(onDisconnect);
 }
 
 uint8_t read()        { return g_pad; }
-bool    isConnected() { return hid.isConnected(); }
-
-// ============================================================================
-//  Scan / pick / connect UI (TFT_eSPI, driven by the board buttons)
-// ============================================================================
-static const int DISP_W   = 320;
-static const int DISP_H   = 240;
-static const int TITLE_Y  = 6;
-static const int SEP_Y    = 28;
-static const int TOP_Y    = 40;
-static const int ROW_H    = 22;
-static const int MAX_ROWS = 7;
-static const int FOOTER_Y = DISP_H - 20;
-
-static void drawScanning(TFT_eSPI &tft)
-{
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextFont(2);
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("K10 NES  -  BLE HID Scanning...", 8, TITLE_Y);
-    tft.drawFastHLine(0, SEP_Y, DISP_W, TFT_DARKGREY);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.drawString("Searching for HID gamepads (2s)", 8, TOP_Y + 10);
-    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.drawString("See serial for live scan results", 8, TOP_Y + 40);
-}
-
-// `order` maps a display row -> hid.device() index (sorted by RSSI desc).
-static void drawPicker(TFT_eSPI &tft, const int *order, int count,
-                       int sel, int top)
-{
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextWrap(false);
-    tft.setTextFont(2);
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("K10 NES  -  Select HID Device", 8, TITLE_Y);
-    tft.drawFastHLine(0, SEP_Y, DISP_W, TFT_DARKGREY);
-
-    int rows = count < MAX_ROWS ? count : MAX_ROWS;
-    for (int i = 0; i < rows; i++)
-    {
-        int idx = top + i;
-        if (idx >= count) break;
-        int y = TOP_Y + i * ROW_H;
-        const BLE_HID_Host::Device *d = hid.device(order[idx]);
-        bool hot = (idx == sel);
-
-        if (hot)
-        {
-            tft.fillRect(0, y - 1, DISP_W, ROW_H, TFT_NAVY);
-            tft.setTextColor(TFT_YELLOW, TFT_NAVY);
-            tft.drawString(">", 6, y + 3);
-        }
-        else
-        {
-            tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        }
-        const char *nm = (d && d->name.length()) ? d->name.c_str()
-                                                 : (d ? d->address.c_str() : "?");
-        char line[48];
-        snprintf(line, sizeof(line), "%-22s %ddB", nm, d ? d->rssi : 0);
-        tft.drawString(line, 24, y + 3);
-    }
-
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("A:next  B:connect  hold A+B:rescan", 8, FOOTER_Y);
-}
-
-static void drawConnecting(TFT_eSPI &tft, const char *name)
-{
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextFont(2);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.drawString("Connecting (pairing)...", 8, TOP_Y + 10);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawString(name, 8, TOP_Y + 40);
-}
-
-static void drawMessage(TFT_eSPI &tft, uint16_t color,
-                        const char *l1, const char *l2)
-{
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextFont(2);
-    tft.setTextColor(color, TFT_BLACK);
-    tft.drawString(l1, 8, TOP_Y + 10);
-    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.drawString(l2, 8, TOP_Y + 40);
-}
+bool    isConnected() { return pad.isConnected(); }
 
 bool connect_flow()
 {
-    TFT_eSPI &tft = k10video::display();
-
-    for (;;)
-    {
-        // ---- scan (blocking 2 s) ----
-        drawScanning(tft);
-        hid.scan(2000);
-
-        int count = hid.deviceCount();
-        if (count == 0)
-        {
-            drawMessage(tft, TFT_RED, "No BLE devices found", "Rescanning in 2s...");
-            delay(2000);
-            continue;
-        }
-
-        // Sort device indices by RSSI (strongest first). Cap the list so a noisy
-        // 2.4 GHz environment doesn't overflow the stack array.
-        int order[32];
-        if (count > 32) count = 32;
-        for (int i = 0; i < count; i++) order[i] = i;
-        for (int i = 0; i < count - 1; i++)
-            for (int j = i + 1; j < count; j++)
-                if (hid.device(order[j])->rssi > hid.device(order[i])->rssi)
-                { int t = order[i]; order[i] = order[j]; order[j] = t; }
-
-        // ---- pick (board buttons) ----
-        int sel = 0, top = 0;
-        drawPicker(tft, order, count, sel, top);
-        uint8_t prev = k10input::read();
-
-        int chosen = -1;          // hid.device() index to connect to
-        for (;;)
-        {
-            uint8_t cur = k10input::read();
-            bool next_edge   = (cur & BTN_NEXT)    && !(prev & BTN_NEXT);
-            bool conn_edge   = (cur & BTN_CONNECT) && !(prev & BTN_CONNECT);
-            bool rescan_edge = (cur & BTN_RESCAN)  && !(prev & BTN_RESCAN);
-            prev = cur;
-
-            if (rescan_edge) break;   // -> outer loop rescans
-
-            if (next_edge && count > 1)
-            {
-                sel = (sel + 1) % count;
-                if (sel < top) top = sel;
-                else if (sel >= top + MAX_ROWS) top = sel - MAX_ROWS + 1;
-                drawPicker(tft, order, count, sel, top);
-            }
-            if (conn_edge) { chosen = order[sel]; break; }
-
-            delay(20);
-        }
-        if (chosen < 0) { delay(150); continue; }   // rescan requested
-
-        // ---- connect (bonds + subscribes; may take a couple seconds) ----
-        const BLE_HID_Host::Device *d = hid.device(chosen);
-        const char *name = (d && d->name.length()) ? d->name.c_str()
-                         : (d ? d->address.c_str() : "?");
-        drawConnecting(tft, name);
-
-        if (hid.connect(chosen))
-        {
-            drawMessage(tft, TFT_GREEN, "Connected:", name);
-            delay(700);
-            return true;
-        }
-        drawMessage(tft, TFT_RED, "Connect failed", "Retrying scan in 2s...");
-        delay(2000);
-        // loop -> fresh scan
-    }
+    return pad.connect_flow();
 }
 
 } // namespace k10blehid

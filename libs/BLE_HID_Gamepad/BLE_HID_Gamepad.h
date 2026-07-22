@@ -31,11 +31,15 @@ public:
 
     // Which bits of the board-button byte mean what in the pick menu. Defaults
     // match the K10 NES layout (board A = next, board B = connect, hold A+B =
-    // rescan); pass a custom map at begin() for a different rig.
+    // rescan); pass a custom map at begin() for a different rig. A constructor
+    // (not default member initializers) is used so ButtonMap() can serve as a
+    // default argument inside this class definition.
     struct ButtonMap {
-        uint8_t next    = 0x02;   // cycle to the next device
-        uint8_t connect = 0x01;   // connect to the highlighted device
-        uint8_t rescan  = 0x04;   // drop the list and rescan
+        uint8_t next;       // cycle to the next device
+        uint8_t connect;    // connect to the highlighted device
+        uint8_t rescan;     // drop the list and rescan
+        ButtonMap(uint8_t n = 0x02, uint8_t c = 0x01, uint8_t r = 0x04)
+            : next(n), connect(c), rescan(r) {}
     };
 
     // Bring up BLE_HID_Host: just-works bonding, drop / auto-reconnect monitor

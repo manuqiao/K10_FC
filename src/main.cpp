@@ -12,6 +12,7 @@
 
 #include <Arduino.h>
 #include "esp_heap_caps.h"
+#include "esp_log.h"       // esp_log_level_set — mute the noisy ESP-IDF gpio tag
 #include "unihiker_k10.h"
 #include "initBoard.h"
 #include "k10_video.h"
@@ -69,7 +70,7 @@ static bool g_bt_hid_mode = false;
 // True once the player picked the matrix keypad. loop() then reads k10matrix.
 static bool g_matrix_mode = false;
 
-// True once the player picked the ADKeyboard (extender C0). loop() then reads k10adkey.
+// True once the player picked the ADKeyboard (Gravity A0). loop() then reads k10adkey.
 static bool g_adkey_mode = false;
 
 // Per-frame timing probe: accumulated across 60 frames, then printed. g_blit_us
@@ -110,6 +111,12 @@ void setup()
 {
     Serial.begin(115200);
     delay(200);
+    // Mute the ESP-IDF gpio driver's spammy `E (xxx) gpio: ...` log lines — it
+    // drops harmless pin-config warnings on this BSP and drowns out [adkey]/
+    // [perf]. Only the "gpio" tag is silenced; everything else is untouched.
+    // Change to ESP_LOG_ERROR (or ESP_LOG_WARN) here if you ever want real gpio
+    // faults back.
+    esp_log_level_set("gpio", ESP_LOG_NONE);
     Serial.println("\n=== K10 NES (nofrendo) ===");
 
     // I2C bus, GPIO expander, buttons, accelerometer, I2S bus, RGB.
@@ -179,18 +186,19 @@ void setup()
     }
     else if (mode == k10menu::MODE_ADKEYBOARD)
     {
-        // ADKeyboard on the IO Extender's C0 (the extender's own chip at I2C
-        // 0x33). Like the matrix keypad it owns the I2C bus during gameplay, so
-        // suspend the board poller (slow expander reads) AND the matrix scan to
-        // keep the C0 ADC reads responsive. k10adkey borrows board A/B itself for
-        // SELECT/START, so the board poller is not needed here either.
+        // ADKeyboard on the board's own Gravity analog port (native ESP32 ADC1 via
+        // analogRead — no I2C). It still reads board A/B on the I2C expander for
+        // SELECT/START, though, so suspend the board poller AND the matrix scan to
+        // keep the shared Wire bus uncontended (Wire isn't thread-safe between
+        // tasks). k10adkey borrows board A/B itself, so the board poller isn't
+        // needed here either.
         k10input::suspend();
         k10matrix::suspend();
         k10adkey::init();
         input   = k10adkey::read;
         dpadNav = true;                // ADKeyboard has a real D-pad (s2/s3/s4/s5)
         g_adkey_mode = true;
-        Serial.println("[main] ADKeyboard mode (extender C0); board poller + matrix suspended");
+        Serial.println("[main] ADKeyboard mode (Gravity A0); board poller + matrix suspended");
     }
 
     int chosen = k10menu::select_game(g_roms, g_rom_count, input, dpadNav);

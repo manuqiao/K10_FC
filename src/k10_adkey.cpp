@@ -1,7 +1,6 @@
 #include "k10_adkey.h"
 
 #include <Arduino.h>
-#include <Wire.h>
 #include "freertos/task.h"
 #include "initBoard.h"   // eP5_KeyA / eP11_KeyB — board buttons live on the I2C expander
 
@@ -15,21 +14,26 @@
 #define NP_LEFT   0x40
 #define NP_RIGHT  0x80
 
-// ============================ extender (DFR1231) I2C protocol =================
-// The keypad is on the IO Extender's C0. The extender chip is at I2C 0x33 on the
-// SAME Wire bus k10.begin() brings up (SDA47/SCL48), so no extra pin/bus setup.
-// Register map (lifted from DFRobot_UnihikerExpansion):
-#define EXTENDER_ADDR     0x33
-#define REG_IO_MODE_C0    0x2c   // +port: write 1 byte to set C0..C3 mode (0x00 = ADC)
-#define REG_ADC_C0        0x45   // +port*3: read 3 bytes [status, hi, lo]
-#define REG_RESET         0xa0   // write DATA_ENABLE to reset the extender chip
-#define DATA_ENABLE       0x01   // status: a sample is ready in [hi, lo]
-#define MODE_ERROR        0x02   // status: port not in ADC mode (re-set it and retry)
-// =============================================================================
-
 // ============================ tunable controls ===============================
-// Which extender multi-function port the keypad is wired to (0=C0..3=C3).
-#define ADKEY_PORT        0
+// ADKeyboard signal wired to the K10 board's OWN Gravity IO interface — the 3-pin
+// PH2.0 full-function analog port — NOT the IO Extender's C0. That port is a
+// native ESP32-S3 ADC1 pin (ADC1 is WiFi-safe; ADC2 is not): A0 = GPIO1 =
+// ADC1_CH0. Switch to A1 (GPIO2 = ADC1_CH1) if you plugged into the second
+// Gravity port. analogRead() on this pin is plain native ADC — no I2C involved.
+#define ADKEY_PIN         A0
+
+// 12-bit ADC (0..4095). Pinned explicitly so a framework default change can't
+// silently rescale the thresholds below.
+#define ADKEY_RESOLUTION  12
+
+// How many raw samples to average per read. Averaging would tame the ESP32 ADC's
+// noise and help s5 (the tightest key — see kKeyThr) — BUT back-to-back
+// analogRead() calls on this ADC bias the result HIGH (~+25 counts observed),
+// just enough to push s5 back above its threshold: with OS=8 s5 stopped
+// registering entirely (s1-s4 have hundreds of counts of margin, so they were
+// fine). So this is OFF (1) for now. Re-enable only together with inter-sample
+// settling (delayMicroseconds) or esp_adc_cal. Each read is ~tens of us.
+#define ADKEY_OVERSAMPLE  1
 
 // 1 = print "[adkey] adc=.. raw=.. key=.. out=.." every ADKEY_DEBUG_MS so you can
 // read off the real per-key ADC values and fill in kKeyThr below. LEAVE ON for
@@ -43,14 +47,20 @@
 // is active at a time and lower key index = lower voltage). Order MUST match
 // kKey2NES: index 0 = s1 ... index 4 = s5.
 //
-// CALIBRATED on real HW (2026-07-10) by reading the [adkey] debug line while
-// pressing each key. This DFR0075 variant holds its keys high (all in
-// 3072..3740, no-key clamps to 4095), NOT the low 120..3041 a naive 10-bit
-// scaling predicts — so the classic defaults are useless here. Each entry is the
-// MIDPOINT between two adjacent keys' centers (optimal for symmetric noise);
-// re-measure with ADKEY_DEBUG=1 if you swap the module.
-//   s1~3072  s2~3185  s3~3320  s4~3500  s5~3740  none~4095
-static const uint16_t kKeyThr[5] = { 3128, 3252, 3410, 3620, 3917 };
+// CALIBRATED on real HW (2026-07-12, Gravity A0, native ESP32 ADC, ADKEY_DEBUG=1)
+// by pressing each key in turn (a/up/down/left/right), with adc=4095 separating
+// the segments. This DFR0075 variant holds its keys HIGH (resistor ladder to
+// VCC), so a LOWER adc = a LOWER key index, and no-key clamps to full-scale 4095
+// — NOT the low 30..760 the classic 10-bit defaults predict. Per-key centers:
+//   s1(a)~2997  s2(up)~3138  s3(left)~3303  s4(down)~3551  s5(right)~3905  none~4095
+// Each entry is the MIDPOINT of the two adjacent centers, so the margin to either
+// neighbor is symmetric (~56-177 counts; ESP32 ADC noise is ~+-10, comfortable).
+// The clean 4095 no-key is what gives s5 ~190 counts of headroom — an earlier
+// capture saw no-key clamp at ~3935 instead; if YOURS ever drops below ~4000 at
+// idle (Right flickers with nothing pressed), the pin's no-key voltage has fallen,
+// so lower kKeyThr[4] toward it. Re-run ADKEY_DEBUG=1 and recompute the midpoints
+// if you swap the module or move to the A1 port.
+static const uint16_t kKeyThr[5] = { 3068, 3220, 3427, 3728, 4000 };
 
 // index 0..4 (s1..s5) -> NES bit. Per spec:
 //   s1 -> A   s2 -> Up   s3 -> Left   s4 -> Down   s5 -> Right
@@ -59,8 +69,8 @@ static const uint8_t kKey2NES[5] = { NP_A, NP_UP, NP_LEFT, NP_DOWN, NP_RIGHT };
 // Consecutive-sample debounce on the decoded key *identity* (not per-bit). The
 // ADC sits clean-ish between keys but can bounce right on a band edge; requiring
 // the same key for DEBOUNCE_COUNT polls in a row rejects that flicker without
-// per-bit contention. Poll period is ~6ms (dominated by the 3ms C0 read), so 2
-// samples ~= 12ms to register a press.
+// per-bit contention. analogRead() on a native ADC1 pin is fast (~tens of us),
+// so the poll period is essentially POLL_MS — 2 samples ~= 6ms to register a press.
 #define DEBOUNCE_COUNT    2
 
 // Hold a newly pressed direction/A key for at least MIN_PRESS_MS even after it
@@ -69,9 +79,9 @@ static const uint8_t kKey2NES[5] = { NP_A, NP_UP, NP_LEFT, NP_DOWN, NP_RIGHT };
 // (its deadline already elapsed). Mirrors k10_matrix's MIN_PRESS_MS rationale.
 #define MIN_PRESS_MS      12
 
-// Background poll gap (ms). The work per poll (one C0 ADC read) sets most of the
-// pace; this just yields a little bus time. The expander board-button reads are
-// the slow part (~11ms each), so they only run every BUTTON_DIV polls —
+// Background poll gap (ms). The native ADC read itself is fast; this just paces
+// the task. The board-button reads for SELECT/START still go through the I2C
+// expander (~11ms each — the slow part), so they only run every BUTTON_DIV polls:
 // SELECT/START are menu/pause buttons, not twitch inputs, so ~22Hz sampling is
 // plenty and keeps the D-pad/A loop fast.
 #define POLL_MS           3
@@ -85,75 +95,14 @@ namespace k10adkey {
 static volatile uint8_t g_buttons = 0;
 static TaskHandle_t     g_task    = nullptr;
 
-// --- I2C helpers (register access to the extender at 0x33) ------------------
-static uint8_t ext_write(uint8_t reg, const uint8_t *data, uint8_t len)
-{
-    Wire.beginTransmission(EXTENDER_ADDR);
-    Wire.write(reg);
-    for (uint8_t i = 0; i < len; i++) Wire.write(data[i]);
-    return Wire.endTransmission();   // 0 == success
-}
-
-static uint8_t ext_read(uint8_t reg, uint8_t *out, uint8_t len)
-{
-    // Match DFRobot's readReg: write the register (with STOP), then requestFrom.
-    if (ext_write(reg, nullptr, 0) != 0) return 0;
-    uint8_t got = Wire.requestFrom((uint8_t)EXTENDER_ADDR, (uint8_t)len);
-    uint8_t i = 0;
-    while (Wire.available() && i < len) out[i++] = Wire.read();
-    return i;
-}
-
-// Reset the extender chip to a known state (mirrors its library's begin(): write
-// DATA_ENABLE to the reset reg, then wait for it to ACK again). Bounded so a
-// missing extender can't hang boot — if it never ACKs, ADC reads just stay at
-// 0xFFFF and the [adkey] debug line shows adc=65535 (clearly "nothing there").
-static void reset_extender()
-{
-    uint8_t en = DATA_ENABLE;
-    ext_write(REG_RESET, &en, 1);
-    for (int i = 0; i < 50; i++)   // up to ~250ms; the chip is normally back in <50ms
-    {
-        Wire.beginTransmission(EXTENDER_ADDR);
-        if (Wire.endTransmission() == 0) break;
-        delay(5);
-    }
-}
-
-// Put C0 into ADC mode. Cheap; called once at task start and again if a read
-// ever reports MODE_ERROR (e.g. the extender was reset).
-static void set_adc_mode()
-{
-    uint8_t mode = 0x00;   // eADC
-    for (int retry = 0; retry < 5; retry++)
-    {
-        if (ext_write(REG_IO_MODE_C0 + ADKEY_PORT, &mode, 1) == 0) return;
-        delay(20);
-    }
-}
-
-// One C0 sample. Returns 0..4095, or 0xFFFF on a hard error / not-ready timeout.
-// Applies the extender's own end clamps (<40 -> 0, >3900 -> 4095) for stability.
+// One native ADC sample (0..4095), averaged over ADKEY_OVERSAMPLE reads to tame
+// the ESP32 ADC's noise (it's what keeps s5 reliable — see kKeyThr). analogRead()
+// reconfigures the pad for analog input each call, so no pinMode setup is needed.
 static uint16_t read_adc()
 {
-    uint8_t buf[3] = {0};
-    uint8_t reg = REG_ADC_C0 + ADKEY_PORT * 3;
-    for (int retry = 0; retry < 5; retry++)
-    {
-        if (ext_read(reg, buf, 3) == 3)
-        {
-            if (buf[0] == DATA_ENABLE)
-            {
-                uint16_t v = ((uint16_t)buf[1] << 8) | buf[2];
-                if (v > 3900)      v = 4095;
-                else if (v < 40)   v = 0;
-                return v;
-            }
-            if (buf[0] == MODE_ERROR) set_adc_mode();   // re-arm, then retry
-        }
-        delay(2);
-    }
-    return 0xFFFF;
+    uint32_t sum = 0;
+    for (int i = 0; i < ADKEY_OVERSAMPLE; i++) sum += analogRead(ADKEY_PIN);
+    return (uint16_t)(sum / ADKEY_OVERSAMPLE);
 }
 
 // Decode the 12-bit reading to a key index 0..4 (s1..s5), or -1 (no key).
@@ -166,9 +115,8 @@ static int8_t decode_key(uint16_t adc)
 
 static void adkey_task(void *)
 {
-    reset_extender();   // bring the extender chip to a known state (clears all C/S modes)
-    set_adc_mode();
-    Serial.printf("[adkey] task started: extender C%d @ I2C 0x%02x\n", ADKEY_PORT, EXTENDER_ADDR);
+    analogReadResolution(ADKEY_RESOLUTION);
+    Serial.printf("[adkey] task started: native ADC on ADKEY_PIN (GPIO%d)\n", (int)ADKEY_PIN);
 
     int8_t   stable = -1;     // currently asserted key (debounced identity)
     int8_t   cand   = -1;     // candidate key seen this run
@@ -178,14 +126,16 @@ static void adkey_task(void *)
     uint8_t  boardBits = 0;   // sampled SELECT/START, held between samples
     uint8_t  poll = 0;
     uint32_t lastDbg = 0;
-    uint16_t lastAdc = 0;     // for the debug line when a read errors out
+    uint16_t lastAdc = 0;
+    int8_t   lastRaw = -1;   // instantaneous decode_key() of the latest sample
     int8_t   lastKey = -1;
 
     for (;;)
     {
         uint16_t adc = read_adc();
-        int8_t raw = (adc == 0xFFFF) ? stable : decode_key(adc);  // keep last on a read error
+        int8_t raw = decode_key(adc);   // native read never errors out, so no sentinel
         lastAdc = adc;
+        lastRaw = raw;
 
         // Consecutive-sample debounce on the key identity.
         if (raw == cand) { if (candN < 255) candN++; }
@@ -224,7 +174,7 @@ static void adkey_task(void *)
         {
             lastDbg = millis();
             Serial.printf("[adkey] adc=%-4u rawkey=%d stable=%d out=0x%02x\n",
-                          (unsigned)lastAdc, (int)lastKey, (int)stable, out);
+                          (unsigned)lastAdc, (int)lastRaw, (int)stable, out);
         }
 #endif
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
@@ -233,8 +183,11 @@ static void adkey_task(void *)
 
 void init()
 {
-    // C0 is on the extender chip on the shared Wire bus (already up from
-    // k10.begin()); no GPIO config. Mode is set inside the task.
+    // ADKEY_PIN is a native ESP32 ADC1 pin — analogRead() configures the pad, so
+    // no GPIO setup is needed. The board buttons stay on the I2C expander (read
+    // inside the task for SELECT/START), which is why main() still suspends the
+    // board poller and matrix scan: to keep the shared Wire bus uncontended
+    // (Wire isn't thread-safe between tasks).
     if (g_task) return;   // idempotent
     xTaskCreatePinnedToCore(adkey_task, "k10adkey", 4096, nullptr, 3, &g_task, 0);
 }

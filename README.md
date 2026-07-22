@@ -90,10 +90,10 @@ BLE HID 手柄**（HID 服务 `0x1812`）。开机选「Bluetooth HID gamepad」
 > 完整的连接/配对/订阅/解码流程（含踩过的两个坑、Report Map 解析、报文特判、API 表）见
 > [`libs/BLE_HID_Host/README.md`](libs/BLE_HID_Host/README.md)。
 
-### ADKeyboard（DFR0075 模拟 5 按键，接扩展板 C0）
+### ADKeyboard（DFR0075 模拟 5 按键，接板载 Gravity 模拟口）
 
 把 **[ADKeyboard 模拟 5 按键模块](https://wiki.dfrobot.com.cn/_SKU_DFR0075_ADKeyboard)**
-（SKU DFR0075）接到 **K10 IO 扩展板（SKU DFR1231）的 C0 多功能口**，开机选「ADKeyboard」即可。
+（SKU DFR0075）接到 **K10 板载的 Gravity IO 接口（3-pin PH2.0 全功能模拟口）**，开机选「ADKeyboard」即可。
 模块只有 5 颗键，所以方向 + A 由它出，SELECT/START 借用板上两颗键凑出来：
 
 | 游戏动作 | NES 按键 | 操作方式 |
@@ -103,17 +103,23 @@ BLE HID 手柄**（HID 服务 `0x1812`）。开机选「Bluetooth HID gamepad」
 | 选择 | SELECT | 板上按键 **A** |
 | 开始 / 暂停 | START | 板上按键 **B** |
 
-> 注意：C0 不是 K10 的某个 GPIO/ADC 口——扩展板自带一颗挂在 **I2C 0x33** 的芯片（与板载扩展器、
-> 加速度计、光敏同一条 Wire 总线）来测 C0 电压、对外暴露 12-bit ADC。所以读按键是一次 I2C 事务
-> （先写寄存器 `0x2c` 把 C0 设成 ADC 模式，再读 `0x45` 三字节），并非 `analogRead()`。和矩阵键盘
-> 模式一样，进入此模式时会停掉板载输入轮询和矩阵扫描，把 I2C 总线让给 C0 读取。
+> 接线：ADKeyboard 的信号脚（S）接 K10 **Gravity IO 接口的信号端**，VCC/GND 对应接 3V3/GND。
+> 这个口是 K10 的**原生 ESP32-S3 ADC1 引脚**（`A0`=GPIO1=ADC1_CH0；第二个 Gravity 口是
+> `A1`=GPIO2=ADC1_CH1），ADC1 在开 WiFi 时仍可用（ADC2 不行）。所以读按键就是一次普通的
+> `analogRead()`，不走 I2C——和早先「接扩展板 C0、走 I2C 0x33」的接法不同（那条路在 git 历史里）。
+> 引脚在 `src/k10_adkey.cpp` 顶部的 `ADKEY_PIN`（默认 `A0`），插第二个口就改成 `A1`。
+> 模式启动时仍会停掉板载输入轮询和矩阵扫描——因为 SELECT/START 借用的板上两颗键在 I2C 扩展器上，
+> 本模式要自己读这两颗键，得把 Wire 总线让出来，避免和板载轮询抢总线（Wire 跨任务不安全）。
 
 **首次使用必须标定阈值**（和矩阵键盘 / HID 手柄同一套套路）：`src/k10_adkey.cpp` 顶部
 `ADKEY_DEBUG` 默认为 `1`，开机后串口每 0.4 秒打印一行 `[adkey] adc=… rawkey=… …`。依次按下
 s1–s5，读出每个键的 `adc` 值，按升序填进 `kKeyThr[5]`（按下时 `adc < 阈值` 即判定为该键），
-再把 `ADKEY_DEBUG` 改回 `0` 重新编译即可。默认值是 DFRobot 经典 10-bit 阈值（30/150/360/535/760）
-按 12-bit 比例放大得到的，只是起点——**DFR0075 有多个硬件版本、且 ADC 在两头非线性，必须实测**。
-键位映射（s1→A、s2→Up、s3→Left、s4→Down、s5→Right）也在同文件的 `kKey2NES[]`，接法不同就改这张表。
+再把 `ADKEY_DEBUG` 改回 `0` 重新编译即可。**`kKeyThr[]` 已按板载 Gravity A0（原生 ESP32 ADC）实测标定**（2026-07-12：s1~2997 / s2~3138 /
+s3~3303 / s4~3551 / s5~3905，不按 ~4095；阈值取相邻键中心的中点，余量 56-177 count）。这只 DFR0075
+是「高位有效」（按键落在 ~3000-3900、不按 clamp 到 4095，不是 DFRobot 经典的低位 30/150/360/535/760）。
+**换模块或换 A1 口仍需重测**——不同个体 ADC 量化值会偏移；若松手时 Right 误触发（idle adc 跌破阈值），
+把 `kKeyThr[4]` 调低。键位映射（s1→A、s2→Up、s3→Left、s4→Down、s5→Right）也在同文件的
+`kKey2NES[]`，接法不同就改这张表。
 
 ---
 

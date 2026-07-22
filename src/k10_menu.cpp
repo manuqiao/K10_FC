@@ -86,7 +86,7 @@ ControlMode select_mode()
                               "Bluetooth controller  (custom)",
                               "Bluetooth HID gamepad",
                               "Matrix keypad",
-                              "ADKeyboard  (extender C0)" };
+                              "ADKeyboard  (Gravity A0)" };
 
     auto draw = [&](int sel) {
         tft.fillScreen(TFT_BLACK);
